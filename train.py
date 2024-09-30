@@ -31,7 +31,7 @@ def get_parser():
     args = parser.parse_args()
     assert args.config is not None
     cfg = config.load_cfg_from_cfg_file(args.config)
-    
+
     if args.opts is not None:
         cfg = config.merge_cfg_from_list(cfg, args.opts)
     return cfg
@@ -51,9 +51,9 @@ def main_process():
 
 def main():
     args = get_parser()
-    
+
     os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(str(x) for x in args.train_gpu)
-    
+
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
@@ -62,20 +62,30 @@ def main():
         args.sync_bn = False
         args.distributed = False
         args.multiprocessing_distributed = False
-    
+
     main_worker(args.train_gpu, args.ngpus_per_node, args)
 
 def main_worker(gpu, ngpus_per_node, argss):
     global args
     args = argss
     print(args)
-    
+
+    # Select device based on availability
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+
+
     BatchNorm = nn.BatchNorm2d
 
     criterion = nn.CrossEntropyLoss(ignore_index=args.ignore_label)
     if args.arch == 'pspnet':
         from models.pspnet import PSPNet
         model = PSPNet(layers=args.layers, classes=args.classes, zoom_factor=args.zoom_factor, criterion=criterion, BatchNorm=BatchNorm, pretrained=args.use_pretrained_weights)
+        model = model.to(device)
         modules_ori = [model.layer0, model.layer1, model.layer2, model.layer3, model.layer4]
         modules_new = [model.ppm, model.cls, model.aux]
     elif args.arch == 'psa':
@@ -85,13 +95,16 @@ def main_worker(gpu, ngpus_per_node, argss):
                        normalization_factor=args.normalization_factor, psa_softmax=args.psa_softmax,
                        criterion=criterion,
                        BatchNorm=BatchNorm)
+        model = model.to(device)
         modules_ori = [model.layer0, model.layer1, model.layer2, model.layer3, model.layer4]
         modules_new = [model.psa, model.cls, model.aux]
     elif args.arch == 'aunet':
         from models.unet import AttU_Net
         model = AttU_Net(img_ch=3,output_ch=args.classes)
+        model = model.to(device)
     elif args.arch == 'transformer':
         model = create_segmenter(args)
+        model = model.to(device)
 
     params_list = []
     for module in modules_ori:
@@ -109,8 +122,8 @@ def main_worker(gpu, ngpus_per_node, argss):
         logger.info("=> creating model ...")
         logger.info("Classes: {}".format(args.classes))
         logger.info(model)
-    
-    model = torch.nn.DataParallel(model.cuda()) # @sh: add to avoid prev commented out block 
+
+    # model = torch.nn.DataParallel(model.cuda()) # @sh: add to avoid prev commented out block
 
     if args.weight:
         if os.path.isfile(args.weight):
@@ -147,7 +160,8 @@ def main_worker(gpu, ngpus_per_node, argss):
 
     # Import the requested dataset
     if args.dataset.lower() == 'rescuenet':
-        from data import RescueNetv2 as dataset
+        from data import RescueNet as dataset
+
     else:
         # Should never happen...but just in case it does
         raise RuntimeError("\"{0}\" is not a supported dataset.".format(
@@ -168,7 +182,7 @@ def main_worker(gpu, ngpus_per_node, argss):
         transform=image_transform,
         label_transform=label_transform)
     train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, drop_last=True)
-    
+
     if args.evaluate:
         label_transform = transforms.Compose([
             transforms.Resize((args.train_h, args.train_w), Image.NEAREST),
@@ -179,11 +193,11 @@ def main_worker(gpu, ngpus_per_node, argss):
             transform=image_transform,
             label_transform=label_transform)
         val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size_val, shuffle=False, num_workers=args.workers)
-        
+
     for epoch in range(args.start_epoch, args.epochs):
         epoch_log = epoch + 1
-        
-        loss_train, mIoU_train, mAcc_train, allAcc_train = train(train_loader, model, optimizer, epoch)
+
+        loss_train, mIoU_train, mAcc_train, allAcc_train = train(train_loader, model, optimizer, epoch, device)
         # record train loss and miou corresponding to each epoch
         train_epochs.append(epoch)
         train_loss.append(loss_train)
@@ -213,7 +227,7 @@ def main_worker(gpu, ngpus_per_node, argss):
                 writer.add_scalar('mAcc_val', mAcc_val, epoch_log)
                 writer.add_scalar('allAcc_val', allAcc_val, epoch_log)
 
-def train(train_loader, model, optimizer, epoch):
+def train(train_loader, model, optimizer, epoch, device):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     main_loss_meter = AverageMeter()
@@ -233,16 +247,20 @@ def train(train_loader, model, optimizer, epoch):
             w = int((target.size()[2] - 1) / 8 * args.zoom_factor + 1)
             # 'nearest' mode doesn't support align_corners mode and 'bilinear' mode is fine for downsampling
             target = F.interpolate(target.unsqueeze(1).float(), size=(h, w), mode='bilinear', align_corners=True).squeeze(1).long()
-        
-        input = input.cuda(non_blocking=True).float()
-        target = target.cuda(non_blocking=True)
+
+        # input = input.cuda(non_blocking=True).float()
+        # Handling input tensor
+        input = input.to(device, non_blocking=True).float()
+
+        # target = target.cuda(non_blocking=True)
+        target = target.to(device, non_blocking=True)
         output, main_loss, aux_loss = model(input, target)
         if not args.multiprocessing_distributed:
             main_loss, aux_loss = torch.mean(main_loss), torch.mean(aux_loss)
         loss = main_loss + args.aux_weight * aux_loss
-        
+
         optimizer.zero_grad()
-        loss.backward() 
+        loss.backward()
         optimizer.step()
 
         n = input.size(0)

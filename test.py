@@ -30,7 +30,8 @@ from torchvision.utils import save_image
 from models.factory import create_segmenter
 
 
-device = torch.device('cuda')
+# device = torch.device('cuda')
+device = torch.device('cpu')
 
 def get_parser():
     parser = argparse.ArgumentParser(description='PyTorch Semantic Segmentation')
