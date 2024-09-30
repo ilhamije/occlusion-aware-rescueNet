@@ -1,0 +1,71 @@
+DATA:
+  data_root: dataset/RescueNet
+  train_list: dataset/cityscapes/list/fine_train.txt
+  val_list: dataset/cityscapes/list/fine_val.txt
+  classes: 11
+TRAIN:
+  arch: pspnet
+  layers: 101
+  use_pretrained_weights: true
+  dataset: rescuenet
+  sync_bn: true
+  train_h: 713
+  train_w: 713
+  scale_min: 0.5
+  scale_max: 2
+  rotate_min: -10
+  rotate_max: 10
+  zoom_factor: 8
+  ignore_label: 255
+  aux_weight: 0.4
+  train_gpu:
+    - 0
+  workers: 4
+  batch_size: 2
+  batch_size_val: 1
+  base_lr: 0.001
+  epochs: 100
+  start_epoch: 0
+  power: 0.9
+  momentum: 0.9
+  weight_decay: 0.00001
+  manual_seed: null
+  print_freq: 10
+  save_freq: 1
+  save_path: exp/RescueNet/pspnet101/model
+  weight: null
+  resume: null
+  evaluate: false
+Distributed:
+  dist_url: tcp://127.0.0.1:6789
+  dist_backend: nccl
+  multiprocessing_distributed: true
+  world_size: 1
+  rank: 0
+  use_apex: true
+  opt_level: O0
+  keep_batchnorm_fp32: null
+  loss_scale: null
+TEST:
+  test_list: dataset/michael/list/test_img_list.txt
+  split: val
+  mode: vis
+  predict_color: true
+  base_size: 2048
+  test_h: 713
+  test_w: 713
+  scales:
+    - 1
+  has_prediction: false
+  index_start: 0
+  index_step: 0
+  test_gpu:
+    - 0
+  model_path: null
+  save_folder: null
+  imshow_batch: true
+  device: cuda
+  ignore_unlabeled: true
+  print_step: false
+  output: outputs
+  dataset_dir: dataset/RescueNet
